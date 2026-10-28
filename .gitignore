@@ -1,0 +1,25 @@
+.DS_Store
+
+# Mac app build output
+app/.build/
+app/build/
+app/.swiftpm/
+
+# videos, audio and transcripts never go in the repo
+*.mp4
+*.mov
+*.m4v
+*.mkv
+*.webm
+*.mp3
+*.m4a
+*.wav
+*.pdf
+*.docx
+*.srt
+*.vtt
+*.png
+
+# app assets are images too, but belong in the repo
+!app/Resources/*.png
+!docs/screenshots/*.png
