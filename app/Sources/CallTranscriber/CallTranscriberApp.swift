@@ -18,6 +18,7 @@ struct CallTranscriberApp: App {
                 .frame(minWidth: 860, minHeight: 560)
                 .onAppear {
                     model.restoreQueue()  // the files from last time
+                    if model.startWhenAdded, !model.queueOrder.isEmpty { model.startQueue() }  // e.g. a call recorded before the app was quit
                     handleLaunchArguments()
                 }
                 .onOpenURL { model.add([$0]) }  // files dropped on the app's Dock icon

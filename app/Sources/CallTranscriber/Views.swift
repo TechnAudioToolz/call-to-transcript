@@ -299,6 +299,7 @@ struct ItemDetail: View {
                         if item.kind == .call {
                             TextField("Name of the call", text: $title)
                                 .onSubmit { model.rename(item, title: title) }
+                                .labelsHidden()
                                 .font(.headline)
                                 .help("Name the call (for example the client's name) and press Return: the saved files are renamed")
                         } else {
@@ -310,8 +311,12 @@ struct ItemDetail: View {
                                 NSWorkspace.shared.activateFileViewerSelecting(item.outputs.isEmpty ? [item.url] : item.outputs)
                             }
                             if item.kind == .call {
-                                Button("Recording") { NSWorkspace.shared.activateFileViewerSelecting([item.meFile, item.themFile]) }
-                                    .help("Show the two sound files: \(CallFiles.me) (your microphone) and \(CallFiles.them) (the other side)")
+                                Button("Recording") {
+                                    let both = item.url.appendingPathComponent(CallFiles.both)
+                                    NSWorkspace.shared.activateFileViewerSelecting(
+                                        FileManager.default.fileExists(atPath: both.path) ? [both] : [item.meFile, item.themFile])
+                                }
+                                .help("Show the recording: \(CallFiles.both) has both sides together; \(CallFiles.me) (your microphone) and \(CallFiles.them) (the other side) are kept for the transcript")
                             }
                         }
                     }

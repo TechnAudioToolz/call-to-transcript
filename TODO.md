@@ -45,6 +45,7 @@ looking at language patterns.
 ## Call Transcriber (paused 2026-10-28)
 - [x] Engine call mode (--me/--them): tested on a synthetic two-voice call, Me/Client correct, speaker echo removed
 - [x] App: Record/Pause/Stop, mic + Core Audio process tap, level meters, menu bar/Dock REC sign, consent notice
-- [ ] Check the app run on the test call wrote PDF/DOCX (was in progress)
+- [x] App run on the test call wrote PDF and DOCX (Me and Client); Call.m4a mixes both sides
+- [x] Installed in /Applications (rebuild + `ditto` to update; ad-hoc signed, so macOS asks for permissions again after each update)
 - [ ] Live recording test on a real call (needs Allow for Microphone and System Audio Recording)
 - [ ] README for Call Transcriber; merge the recorder into Transcript Maker later

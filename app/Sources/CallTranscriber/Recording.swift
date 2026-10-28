@@ -104,6 +104,15 @@ extension AppModel {
             appendLog("    Nothing was heard from the other side. If they spoke, allow System Audio Recording for "
                       + "Call Transcriber in System Settings > Privacy & Security > Screen & System Audio Recording.")
         }
+        let folder = recorder.folder
+        Task {
+            do {
+                try await CallFiles.mix(folder)
+                appendLog("    Saved both sides together as \(CallFiles.both)")
+            } catch {
+                appendLog("    Couldn't make \(CallFiles.both): \(error.localizedDescription)")
+            }
+        }
         resumeAfterCall()
         if startWhenAdded { startQueue() }
     }

@@ -15,6 +15,27 @@ import Foundation
 enum CallFiles {
     static let me = "Me.caf"
     static let them = "Them.caf"
+    /// Both sides together, to listen to (made when recording stops).
+    static let both = "Call.m4a"
+
+    /// Mixes Me.caf and Them.caf in `folder` into Call.m4a.
+    static func mix(_ folder: URL) async throws {
+        let composition = AVMutableComposition()
+        for name in [me, them] {
+            let asset = AVURLAsset(url: folder.appendingPathComponent(name))
+            guard let source = try await asset.loadTracks(withMediaType: .audio).first,
+                  let track = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
+            else { continue }
+            try track.insertTimeRange(CMTimeRange(start: .zero, duration: try await asset.load(.duration)), of: source, at: .zero)
+        }
+        let output = folder.appendingPathComponent(both)
+        try? FileManager.default.removeItem(at: output)
+        guard let export = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetAppleM4A) else { return }
+        export.outputURL = output
+        export.outputFileType = .m4a
+        await export.export()
+        if let error = export.error { throw error }
+    }
 }
 
 @available(macOS 14.2, *)
