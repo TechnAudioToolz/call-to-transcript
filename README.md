@@ -1,36 +1,65 @@
-# Transcript Maker
+# Call Transcriber
 
-A Mac app that turns videos and recordings into word-for-word transcripts, with each speaker labeled
-(Person 1, Person 2, …). Made for studying lectures and webinars, preparing for tests, and looking closely at
-how people talk: every "um", "uh", false start and repeated word is kept.
+<img src="app/Resources/AppIcon.png" width="128" align="right" alt="Call Transcriber icon">
+
+A Mac app that records your calls and turns them into word-for-word transcripts, with you and the other person
+as separate speakers. Press **Record** when the call starts and **Stop** when it ends: a PDF and a Word (DOCX)
+transcript follow on their own.
 
 Everything runs on your Mac. Nothing is uploaded.
 
-- **Drop videos on top, audio below.** MP4, MOV, M4V, MKV, WebM and more; MP3, M4A, WAV, FLAC and more.
-  Files are transcribed one after another, in the order shown; the arrows change the order.
-- **Who said what.** Voices are told apart automatically. If you know how many people talk, say so for better
-  results. Rename "Person 1" to "Teacher" and the saved files are written again.
-- **Save as** PDF and Word (DOCX), plus plain text, SRT and VTT subtitles if you like, with timestamps before
-  each paragraph so a passage is easy to find in the video.
-- **Toolbar:** add files, pause, stop, the output folder, verbose mode (what the engine is doing), settings,
-  donate, and a coffee cup that keeps the Mac awake for long queues.
+- **Both sides, kept apart.** Your microphone and the Mac's sound (the other side: Zoom, FaceTime, Teams,
+  Google Meet in a browser, phone calls through your iPhone, and so on) are recorded as two tracks. So the
+  transcript knows who said what: "Me" and "Client", or names you choose. If several people were on the
+  other side, their voices are told apart too.
+- **Word for word.** Every "um", "uh", false start and repeated word is kept.
+- **Without headphones too.** When the microphone also hears the other person through the speakers, those
+  words are recognised as an echo and left out of your side.
+- **One recording per call.** `Call.m4a` has both sides together, to listen back to; `Me.caf` and `Them.caf`
+  keep each side on its own.
+- **Visible while recording.** A red recording box with the time and a level meter for each side, a red dot and
+  the time in the menu bar, and "REC" on the Dock icon.
+- **Rename** the call (say, after the client) and the speakers: the saved files are written again.
+- Recordings and videos made elsewhere can be dropped in to be transcribed as well.
+- **Toolbar:** record, pause, stop, add files, the output folder, verbose mode, settings, donate, and a coffee
+  cup that keeps the Mac awake.
 
-Needs macOS 14 Sonoma or newer on Apple Silicon (M1 or later).
+## Recording calls and consent
+
+In many places everyone on a call must agree to it being recorded. California, for example, is a two-party
+(all-party) consent state, and recording without consent there is a crime. Other US states, countries and
+workplaces have their own rules. Before you record, tell the other person, or paste the notice into the call's
+chat (**Copy notice** sits next to the recording timer; edit its words in Settings). The app reminds you before
+recording until you turn the reminder off.
+
+## Needs
+
+- macOS 14.4 or newer on Apple Silicon (M1 or later) to record calls. Transcribing files works from macOS 14.
+- The first time you record, macOS asks for two permissions: **Microphone** (your side) and **System Audio
+  Recording** (the other side). Both can be changed in System Settings > Privacy & Security.
+
+## Where things are saved
+
+- Transcripts: `~/Call Transcripts` (change it in Settings)
+- Recordings: `~/Call Transcripts/Recordings/Call 2026-10-28 14.05/` with `Call.m4a`, `Me.caf` and `Them.caf`
 
 ## How it works
 
-1. The sound is taken out of the video (16 kHz mono).
-2. NVIDIA's Parakeet speech recognition ("ultra" build, 2.1 % word error rate on LibriSpeech test-clean) hears
-   the words, with the time of each one. It runs on the Mac's Neural Engine, roughly 20-30 times faster than real time.
-3. pyannote's speaker models (segmentation, WeSpeaker embeddings, VBx clustering) work out who spoke when.
-4. Each word goes to the voice speaking at that moment, and the words are grouped into paragraphs per speaker.
+1. **Recording.** The microphone through AVAudioEngine; the Mac's sound through a Core Audio process tap, a copy
+   of what every app plays before it reaches the speakers or headphones. Each side goes to its own file (AAC),
+   and both start at the same moment.
+2. **Listening.** NVIDIA's Parakeet speech recognition ("ultra" build) hears each side on its own, with the time
+   of each word, on the Mac's Neural Engine.
+3. **Putting it together.** Words the microphone picked up from the speakers are left out, each side is cut into
+   stretches at sentence ends and pauses, and the stretches are laid out in the order they were said.
+4. With more than one person on the other side, pyannote's speaker models tell their voices apart.
 
-Both models run through [FluidAudio](https://github.com/FluidInference/FluidAudio). A copy of it lives in
-`app/Vendor/FluidAudio` with one fix for macOS 14 (see `VENDORED.md` there).
+The speech and voice models run through [FluidAudio](https://github.com/FluidInference/FluidAudio). A copy of it
+lives in `app/Vendor/FluidAudio` with a fix for macOS 14 (see `VENDORED.md` there). The engine is shared with
+[Transcript Maker](https://github.com/TechnAudioToolz/video-audio-to-transcript).
 
-**No transcript is perfect.** Expect slips with people talking over each other, heavy accents, music under
-speech, and unusual names. Two similar voices can be merged, or one voice split in two. The timestamps make it
-quick to check a passage against the video.
+**No transcript is perfect.** Expect slips with poor connections, people talking over each other, heavy accents
+and unusual names. The timestamps make it quick to check a passage against the recording.
 
 ## Build
 
@@ -39,13 +68,16 @@ cd app
 ./build.sh --open
 ```
 
-The first transcript downloads the models (about 650 MB, once) into
-`~/Library/Application Support/Transcript Maker/models`.
+Then drag `app/build/Call Transcriber.app` to Applications. The first transcript downloads the models (about
+650 MB, once) into `~/Library/Application Support/Transcript Maker/models`, shared with Transcript Maker.
+
+The app is signed on your own Mac without an Apple Developer account, so macOS asks again for the microphone
+and system audio permissions after each new build.
 
 From Terminal, the same engine:
 
 ```bash
-app/.build/release/transcribe-cli lecture.mp4 --speakers 2 --out ~/Desktop
+app/.build/release/transcribe-cli --me Me.caf --them Them.caf --title "Client call" --out ~/Desktop
 ```
 
 ## License

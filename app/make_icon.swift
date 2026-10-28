@@ -1,13 +1,29 @@
-// Draws the app icon (a recording sound wave turning into two speakers' lines of text) and writes
-// Resources/AppIcon.icns.
+// Makes the app icon from Resources/AppIcon-source.jpg (the artwork: a rounded blue tile on white) and writes
+// Resources/AppIcon.png and Resources/AppIcon.icns.
 //   swift make_icon.swift
+// The tile is found by where the white ends, cut out with rounded corners, and placed on the macOS icon grid
+// (an 824-point rounded square centred on a 1024 canvas, with a soft shadow).
 import AppKit
+
+let source = NSImage(contentsOfFile: "Resources/AppIcon-source.jpg")!
+let bitmap = NSBitmapImageRep(data: source.tiffRepresentation!)!
+let w = bitmap.pixelsWide, h = bitmap.pixelsHigh
+
+// the tile: the first and last clearly coloured pixels along the middle row and column
+func coloured(_ x: Int, _ y: Int) -> Bool {
+    let c = bitmap.colorAt(x: x, y: y)!.usingColorSpace(.deviceRGB)!
+    return c.blueComponent - c.redComponent > 0.25
+}
+let midY = h / 2, midX = w / 2
+let left = (0..<w).first { coloured($0, midY) }!, right = (0..<w).last { coloured($0, midY) }!
+let top = (0..<h).first { coloured(midX, $0) }!, bottom = (0..<h).last { coloured(midX, $0) }!
+// bitmap rows run top-down; NSImage drawing runs bottom-up
+let tileInSource = NSRect(x: left, y: h - 1 - bottom, width: right - left + 1, height: bottom - top + 1)
+print("Tile in the artwork: \(tileInSource)")
 
 let size: CGFloat = 1024
 let image = NSImage(size: NSSize(width: size, height: size))
 image.lockFocus()
-
-// macOS icon grid: an 824-point rounded square centred on the 1024 canvas, with a soft shadow
 let tile = NSRect(x: 100, y: 100, width: 824, height: 824)
 let shape = NSBezierPath(roundedRect: tile, xRadius: 185, yRadius: 185)
 NSGraphicsContext.saveGraphicsState()
@@ -16,61 +32,24 @@ shadow.shadowColor = NSColor.black.withAlphaComponent(0.35)
 shadow.shadowOffset = NSSize(width: 0, height: -10)
 shadow.shadowBlurRadius = 24
 shadow.set()
-NSColor.black.setFill()
+NSColor(red: 0.05, green: 0.25, blue: 0.5, alpha: 1).setFill()
 shape.fill()
 NSGraphicsContext.restoreGraphicsState()
-
 NSGraphicsContext.saveGraphicsState()
 shape.addClip()
-NSGradient(starting: NSColor(red: 0.07, green: 0.24, blue: 0.26, alpha: 1),
-           ending: NSColor(red: 0.10, green: 0.52, blue: 0.45, alpha: 1))!.draw(in: tile, angle: -60)
-
-// the page
-let page = NSRect(x: 380, y: 230, width: 420, height: 560)
-NSGraphicsContext.saveGraphicsState()
-let pageShadow = NSShadow()
-pageShadow.shadowColor = NSColor.black.withAlphaComponent(0.3)
-pageShadow.shadowOffset = NSSize(width: 0, height: -8)
-pageShadow.shadowBlurRadius = 20
-pageShadow.set()
-NSColor(white: 0.97, alpha: 1).setFill()
-NSBezierPath(roundedRect: page, xRadius: 36, yRadius: 36).fill()
-NSGraphicsContext.restoreGraphicsState()
-
-// lines of text: a speaker name in colour, then its words, for each side of the call
-let accents = [NSColor(red: 0.95, green: 0.55, blue: 0.20, alpha: 1), NSColor(red: 0.20, green: 0.50, blue: 0.85, alpha: 1)]
-let ink = NSColor(white: 0.62, alpha: 1)
-var y: CGFloat = 700
-for (p, paragraph) in [[0.45, 0.8, 0.72, 0.55], [0.38, 0.8, 0.66]].enumerated() {
-    for (i, width) in paragraph.enumerated() {
-        (i == 0 ? accents[p] : ink).setFill()
-        NSBezierPath(roundedRect: NSRect(x: 430, y: y, width: 320 * width, height: 30), xRadius: 15, yRadius: 15).fill()
-        y -= i == 0 ? 56 : 50
-    }
-    y -= 30
-}
-
-// the sound wave, coming in from the left
-let bars: [CGFloat] = [90, 200, 330, 220, 130]
-for (i, height) in bars.enumerated() {
-    NSColor.white.setFill()
-    let x = 165 + CGFloat(i) * 42
-    NSBezierPath(roundedRect: NSRect(x: x, y: 510 - height / 2, width: 26, height: height), xRadius: 13, yRadius: 13).fill()
-}
-
-// the red recording dot
-NSColor.white.setFill()
-NSBezierPath(ovalIn: NSRect(x: 168, y: 692, width: 132, height: 132)).fill()
-NSColor(red: 0.92, green: 0.18, blue: 0.20, alpha: 1).setFill()
-NSBezierPath(ovalIn: NSRect(x: 184, y: 708, width: 100, height: 100)).fill()
+// a little inside the edge, so none of the artwork's own corners or white shows
+source.draw(in: tile, from: tileInSource.insetBy(dx: 6, dy: 6), operation: .copy, fraction: 1)
 NSGraphicsContext.restoreGraphicsState()
 image.unlockFocus()
+
+let tiff = image.tiffRepresentation!
+try! NSBitmapImageRep(data: tiff)!.representation(using: .png, properties: [:])!
+    .write(to: URL(fileURLWithPath: "Resources/AppIcon.png"))
 
 // Write every size iconutil expects, then pack them into an .icns
 let iconset = URL(fileURLWithPath: "build/AppIcon.iconset")
 try? FileManager.default.removeItem(at: iconset)
 try! FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
-let tiff = image.tiffRepresentation!
 for base in [16, 32, 128, 256, 512] {
     for scale in [1, 2] {
         let px = base * scale
@@ -79,16 +58,15 @@ for base in [16, 32, 128, 256, 512] {
                                    colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-        NSGraphicsContext.current?.imageInterpolation = .high
         NSImage(data: tiff)!.draw(in: NSRect(x: 0, y: 0, width: px, height: px))
         NSGraphicsContext.restoreGraphicsState()
         let name = scale == 1 ? "icon_\(base)x\(base).png" : "icon_\(base)x\(base)@2x.png"
         try! rep.representation(using: .png, properties: [:])!.write(to: iconset.appendingPathComponent(name))
     }
 }
-let p = Process()
-p.executableURL = URL(fileURLWithPath: "/usr/bin/iconutil")
-p.arguments = ["-c", "icns", iconset.path, "-o", "Resources/AppIcon.icns"]
-try! p.run()
-p.waitUntilExit()
-print(p.terminationStatus == 0 ? "Wrote Resources/AppIcon.icns" : "iconutil failed")
+let iconutil = Process()
+iconutil.executableURL = URL(fileURLWithPath: "/usr/bin/iconutil")
+iconutil.arguments = ["-c", "icns", iconset.path, "-o", "Resources/AppIcon.icns"]
+try! iconutil.run()
+iconutil.waitUntilExit()
+print("Wrote Resources/AppIcon.png and Resources/AppIcon.icns")
