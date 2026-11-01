@@ -53,9 +53,17 @@ final class Item: ObservableObject, Identifiable {
     }
 
     var transcriptFile: URL { AppModel.supportFolder.appendingPathComponent("transcripts/\(id.uuidString).json") }
-    var meFile: URL { url.appendingPathComponent(CallFiles.me) }
     var themFile: URL { url.appendingPathComponent(CallFiles.them) }
-    var inputFile: URL { url.appendingPathComponent(CallFiles.input) }
+    /// Your side in a two-track call: the inputs combined (or the one input).
+    var meFile: URL {
+        let mine = url.appendingPathComponent(CallFiles.mine)
+        return FileManager.default.fileExists(atPath: mine.path) ? mine : CallFiles.inputs(in: url).first ?? mine
+    }
+    /// What's transcribed when voices are told apart: everything combined (or the one input).
+    var inputFile: URL {
+        let both = url.appendingPathComponent(CallFiles.both)
+        return FileManager.default.fileExists(atPath: both.path) ? both : CallFiles.inputs(in: url).first ?? both
+    }
     /// A call recorded as two tracks (Me and the other side) rather than one recording with voices told apart.
     var isTwoTrack: Bool { FileManager.default.fileExists(atPath: themFile.path) }
 
@@ -140,7 +148,12 @@ final class AppModel: ObservableObject {
     @Published var recorder: AnyObject?
     @Published var recordingPaused = false
     @Published var recordingElapsed = 0.0
-    @Published var levels: (me: Float, them: Float) = (0, 0)
+    /// Meters: each input, and the other side (two-track mode). Also shown by Settings' Test.
+    @Published var inputLevels: [Float] = []
+    @Published var themLevel: Float = 0
+    /// Settings' Test of the inputs, while it runs.
+    @Published var tester: AnyObject?
+    var testTimer: Timer?
     @Published var heardThem = false
     var recordingTimer: Timer?
     var recordingStarted = Date()
@@ -165,13 +178,29 @@ final class AppModel: ObservableObject {
     @Published var speakerMode = SpeakerMode(rawValue: UserDefaults.standard.string(forKey: "speakerMode") ?? "") ?? .voices {
         didSet { UserDefaults.standard.set(speakerMode.rawValue, forKey: "speakerMode") }
     }
-    /// The sound card to record from (its Core Audio UID); empty is the Mac's default input.
+    /// Input 1: the sound card to record from (its Core Audio UID); empty is the Mac's default input.
     @Published var inputDeviceUID = UserDefaults.standard.string(forKey: "inputDeviceUID") ?? "" {
         didSet { UserDefaults.standard.set(inputDeviceUID, forKey: "inputDeviceUID") }
     }
     /// 0 mixes all the sound card's input channels; 1, 2… records just that one.
     @Published var inputChannel = UserDefaults.standard.integer(forKey: "inputChannel") {
         didSet { UserDefaults.standard.set(inputChannel, forKey: "inputChannel") }
+    }
+    /// Input 2, optional: another sound card or microphone, combined with input 1.
+    @Published var input2Enabled = UserDefaults.standard.bool(forKey: "input2Enabled") {
+        didSet { UserDefaults.standard.set(input2Enabled, forKey: "input2Enabled") }
+    }
+    @Published var input2DeviceUID = UserDefaults.standard.string(forKey: "input2DeviceUID") ?? "" {
+        didSet { UserDefaults.standard.set(input2DeviceUID, forKey: "input2DeviceUID") }
+    }
+    @Published var input2Channel = UserDefaults.standard.integer(forKey: "input2Channel") {
+        didSet { UserDefaults.standard.set(input2Channel, forKey: "input2Channel") }
+    }
+
+    /// The inputs to record, as set in Settings.
+    var inputChoices: [InputChoice] {
+        [InputChoice(uid: inputDeviceUID.isEmpty ? nil : inputDeviceUID, channel: inputChannel)]
+            + (input2Enabled ? [InputChoice(uid: input2DeviceUID.isEmpty ? nil : input2DeviceUID, channel: input2Channel)] : [])
     }
     /// Whether the call being recorded has two tracks (fixed when Record is pressed).
     @Published var recordingTracks = false

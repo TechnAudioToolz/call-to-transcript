@@ -33,10 +33,10 @@ extension AppModel {
     @available(macOS 14.4, *)
     private func beginRecording() {
         let name = "Call " + Self.callStamp.string(from: Date())
-        let uid = inputDeviceUID.isEmpty ? nil : inputDeviceUID
+        stopTest()
         let tracks = speakerMode == .tracks
         let recorder = CallRecorder(folder: uniqueFolder(recordingsFolder.appendingPathComponent(name)),
-                                    inputUID: uid, channel: inputChannel, macSound: tracks)
+                                    inputs: inputChoices, macSound: tracks)
         recorder.onProblem = { [weak self] problem in
             Task { @MainActor in
                 self?.appendLog("    " + problem)
@@ -68,11 +68,10 @@ extension AppModel {
             Task { @MainActor in self?.tick() }
         }
         RecordingSign.shared.show(model: self)
-        appendLog("— Recording \(recorder.folder.lastPathComponent)")
-        appendLog("    Files: \(recorder.folder.path)")
-        let device = (uid.flatMap(AudioDevices.device(uid:)) ?? AudioDevices.defaultInput()).flatMap(AudioDevices.name) ?? "the default input"
-        appendLog("    From: \(device), \(inputChannel == 0 ? "all channels" : "channel \(inputChannel)")"
-                  + (tracks ? ", and the Mac's sound as the other side" : ""))
+        appendLog("— Recording \(recorder.folder!.lastPathComponent)")
+        appendLog("    Files: \(recorder.folder!.path)")
+        for (i, input) in recorder.inputs.enumerated() { appendLog("    Input \(i + 1): \(describe(input))") }
+        if tracks { appendLog("    The other side: the Mac's sound") }
         lastMessage = "Recording. Press Stop (⌘.) when the call is over."
     }
 
@@ -100,43 +99,95 @@ extension AppModel {
         if let sleepActivity { ProcessInfo.processInfo.endActivity(sleepActivity) }
         sleepActivity = nil
         RecordingSign.shared.hide()
-        levels = (0, 0)
+        inputLevels = []
+        themLevel = 0
         appendLog("    Recorded \(clock(recordingElapsed))")
 
-        let item = Item(url: recorder.folder, kind: .call)
-        item.title = recorder.folder.lastPathComponent
+        let folder = recorder.folder!
+        let item = Item(url: folder, kind: .call)
+        item.title = folder.lastPathComponent
         item.speakers = recorder.macSound ? 1 : 0  // one person on the other side, or work out how many voices
         item.cleanup = defaultCleanup
         item.duration = recordingElapsed
         items.append(item)
-        queueOrder.insert(item.id, at: 0)
         selection = item.id
-        saveQueue()
         lastMessage = "Recorded \(item.title)"
         if recorder.macSound, !heardThem {
             appendLog("    Nothing was heard from the other side. If they spoke, allow System Audio Recording for "
                       + "Call Transcriber in System Settings > Privacy & Security > Screen & System Audio Recording.")
         }
-        let folder = recorder.folder
+        // the inputs (and the other side) combined into one recording; then it's transcribed
+        item.detail = "Combining the recording…"
         Task {
             do {
-                try await CallFiles.mix(folder)
-                appendLog("    Saved both sides together as \(CallFiles.both)")
+                try await CallFiles.combine(folder)
+                appendLog("    Combined into \(CallFiles.both)")
             } catch {
-                appendLog("    Couldn't make \(CallFiles.both): \(error.localizedDescription)")
+                appendLog("    Couldn't combine the recording: \(error.localizedDescription)")
             }
+            item.detail = ""
+            queueOrder.insert(item.id, at: 0)
+            saveQueue()
+            resumeAfterCall()
+            if startWhenAdded { startQueue() }
         }
-        resumeAfterCall()
-        if startWhenAdded { startQueue() }
     }
 
-    /// A call recorded earlier (a folder with Me.caf and Them.caf), e.g. one copied from another Mac.
+    /// "Scarlett 4i4 USB, channel 1"
+    func describe(_ input: InputChoice) -> String {
+        let device = (input.uid.flatMap(AudioDevices.device(uid:)) ?? AudioDevices.defaultInput()).flatMap(AudioDevices.name)
+            ?? "the Mac's default input"
+        return device + (input.channel == 0 ? ", all channels" : ", channel \(input.channel)")
+    }
+
+    // MARK: testing the inputs
+
+    var isTesting: Bool { tester != nil }
+
+    /// Settings' Test: the meters move with each input for a minute, nothing is recorded.
+    func startTest() {
+        guard #available(macOS 14.2, *), !isTesting, !isRecording else { return }
+        Task { @MainActor in
+            guard await microphoneAllowed() else {
+                alert("Call Transcriber can't hear the inputs",
+                      "Allow it in System Settings > Privacy & Security > Microphone.",
+                      settings: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+                return
+            }
+            let tester = CallRecorder(folder: nil, inputs: inputChoices, macSound: false)
+            do {
+                try tester.start()
+            } catch {
+                alert("Couldn't test the inputs", error.localizedDescription)
+                return
+            }
+            self.tester = tester
+            let started = Date()
+            testTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self, let tester = self.tester as? CallRecorder else { return }
+                    self.inputLevels = tester.readLevels().inputs
+                    if Date().timeIntervalSince(started) > 60 { self.stopTest() }
+                }
+            }
+        }
+    }
+
+    func stopTest() {
+        guard #available(macOS 14.2, *) else { return }
+        (tester as? CallRecorder)?.stop()
+        tester = nil
+        testTimer?.invalidate()
+        testTimer = nil
+        if !isRecording { inputLevels = [] }
+    }
+
+    /// A call recorded earlier (a folder with Input.caf, Input 2.caf…, and Them.caf in two-track mode), e.g. one
+    /// copied from another Mac.
     func addCall(_ folder: URL) {
-        let fm = FileManager.default
-        let twoTrack = fm.fileExists(atPath: folder.appendingPathComponent(CallFiles.me).path)
-            && fm.fileExists(atPath: folder.appendingPathComponent(CallFiles.them).path)
-        guard twoTrack || fm.fileExists(atPath: folder.appendingPathComponent(CallFiles.input).path) else {
-            lastMessage = "\(folder.lastPathComponent) doesn't have \(CallFiles.input), or \(CallFiles.me) and \(CallFiles.them)"
+        let twoTrack = FileManager.default.fileExists(atPath: folder.appendingPathComponent(CallFiles.them).path)
+        guard !CallFiles.inputs(in: folder).isEmpty else {
+            lastMessage = "\(folder.lastPathComponent) doesn't have \(CallFiles.input)"
             return
         }
         guard !items.contains(where: { $0.url == folder }) else { return }
@@ -161,7 +212,8 @@ extension AppModel {
         let now = Date()
         recordingElapsed = now.timeIntervalSince(recordingStarted) - pausedTotal - (pausedAt.map { now.timeIntervalSince($0) } ?? 0)
         let read = recorder.readLevels()
-        levels = (read.me, read.them)
+        inputLevels = read.inputs
+        themLevel = read.them
         if read.heardThem, !heardThem { heardThem = true }
         RecordingSign.shared.update(model: self)
     }
@@ -186,7 +238,7 @@ extension AppModel {
         return answer == .alertFirstButtonReturn
     }
 
-    private func microphoneAllowed() async -> Bool {
+    func microphoneAllowed() async -> Bool {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized: return true
         case .notDetermined: return await AVCaptureDevice.requestAccess(for: .audio)

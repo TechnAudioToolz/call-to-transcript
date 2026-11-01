@@ -8,8 +8,10 @@ transcript follow on their own.
 
 Everything runs on your Mac. Nothing is uploaded.
 
-- **Your sound card, fixed.** Choose the sound card (and one of its input channels, or all mixed) in Settings >
-  Recording. Recording stays on it, even if the Mac's default input changes during the call.
+- **Your sound card, fixed.** In Settings > Recording choose input 1 (a sound card and one of its channels, say
+  channel 1 of a Scarlett) and, if you like, input 2 (another sound card or microphone). Each stays on its
+  device even if the Mac's default input changes during the call. Both are recorded on their own and combined
+  into one recording. **Test** shows a meter for each input before the call.
 - **Who's who, two ways** (Settings > Recording):
   - *One recording, voices told apart* (the default): records the sound card only and labels Person 1,
     Person 2… Use this when the sound card hears everyone, as with a mixer, a room or a speakerphone.
@@ -47,8 +49,8 @@ recording until you turn the reminder off.
 ## Where things are saved
 
 - Transcripts: `~/Call Transcripts` (change it in Settings)
-- Recordings: `~/Call Transcripts/Recordings/Call 2026-10-28 14.05/` with `Call.m4a`, plus `Input.caf` (one
-  recording) or `Me.caf` and `Them.caf` (two tracks)
+- Recordings: `~/Call Transcripts/Recordings/Call 2026-10-28 14.05/` with `Call.m4a` (everything combined),
+  `Input.caf` and `Input 2.caf` (each input), and in two-track mode `Them.caf` (the other side) and `Me.m4a`
 
 ## How it works
 

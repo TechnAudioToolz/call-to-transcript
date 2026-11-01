@@ -203,11 +203,9 @@ struct RecordingPanel: View {
                 Button(model.recordingPaused ? "Resume" : "Pause") { model.pauseRecording(!model.recordingPaused) }
                 Button("Stop") { model.stopRecording() }
             }
+            InputMeters()
             if model.recordingTracks {
-                LevelMeter(label: model.myName, systemImage: "mic", level: model.levels.me)
-                LevelMeter(label: model.theirName, systemImage: "speaker.wave.2", level: model.levels.them)
-            } else {
-                LevelMeter(label: "Input", systemImage: "mic", level: model.levels.me)
+                LevelMeter(label: model.theirName, systemImage: "speaker.wave.2", level: model.themLevel)
             }
             if model.recordingTracks, !model.heardThem, model.recordingElapsed > 20, !model.recordingPaused {
                 Text("Nothing heard from the other side yet. If they're talking, allow Call Transcriber under System Settings > "
@@ -225,6 +223,19 @@ struct RecordingPanel: View {
         .background((model.recordingPaused ? Color.yellow : Color.red).opacity(0.08))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(model.recordingPaused ? "Recording paused" : "Recording")
+    }
+}
+
+/// A meter per input: "Input 1 · Scarlett 4i4 USB, channel 1".
+struct InputMeters: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        ForEach(Array(model.inputChoices.enumerated()), id: \.offset) { i, input in
+            LevelMeter(label: "Input \(i + 1)", systemImage: "mic",
+                       level: model.inputLevels.indices.contains(i) ? model.inputLevels[i] : 0)
+                .help(model.describe(input))
+        }
     }
 }
 
@@ -319,9 +330,9 @@ struct ItemDetail: View {
                                     let both = item.url.appendingPathComponent(CallFiles.both)
                                     NSWorkspace.shared.activateFileViewerSelecting(
                                         FileManager.default.fileExists(atPath: both.path) ? [both]
-                                            : item.isTwoTrack ? [item.meFile, item.themFile] : [item.inputFile])
+                                            : CallFiles.inputs(in: item.url) + (item.isTwoTrack ? [item.themFile] : []))
                                 }
-                                .help("Show the recording: \(CallFiles.both) has both sides together; \(CallFiles.me) (your microphone) and \(CallFiles.them) (the other side) are kept for the transcript")
+                                .help("Show the recording: \(CallFiles.both) has everything together; each input (and the other side) is kept on its own too")
                             }
                         }
                     }
@@ -533,40 +544,69 @@ struct SettingsView: View {
     }
 }
 
-/// Which sound card, which of its channels, and who's who.
+/// Which inputs (a sound card and one of its channels each), a test of them, and who's who.
 struct RecordingSettings: View {
     @EnvironmentObject var model: AppModel
     @State private var devices = AudioDevices.inputs()
 
     var body: some View {
         Section("Recording") {
-            Picker("Sound card", selection: $model.inputDeviceUID) {
-                Text("The Mac's default input").tag("")
-                ForEach(devices) { Text("\($0.name) (\($0.channels) in)").tag($0.id) }
-                if !model.inputDeviceUID.isEmpty, !devices.contains(where: { $0.id == model.inputDeviceUID }) {
-                    Text("Not connected").tag(model.inputDeviceUID)
-                }
+            InputRow(number: 1, uid: $model.inputDeviceUID, channel: $model.inputChannel, devices: devices)
+            Toggle("Input 2: add another sound card or microphone", isOn: $model.input2Enabled)
+            if model.input2Enabled {
+                InputRow(number: 2, uid: $model.input2DeviceUID, channel: $model.input2Channel, devices: devices)
             }
-            .help("Recording always uses this sound card, even if the Mac's default input changes")
-            Picker("Channel", selection: $model.inputChannel) {
-                Text("All channels mixed").tag(0)
-                ForEach(1...max(1, channels), id: \.self) { Text("Channel \($0)").tag($0) }
+            Text("Each input stays on its sound card, even if the Mac's default input changes. "
+                 + (model.input2Enabled ? "Both are recorded and combined into one recording." : ""))
+                .font(.caption).foregroundColor(.secondary)
+            HStack {
+                Button(model.isTesting ? "Stop test" : "Test") { model.isTesting ? model.stopTest() : model.startTest() }
+                    .disabled(model.isRecording)
+                    .help("Shows how loud each input is for a minute; nothing is recorded")
+                Button("Look for sound cards again") { devices = AudioDevices.inputs() }
             }
+            if model.isTesting { InputMeters() }
             Picker("Who's who", selection: $model.speakerMode) {
                 ForEach(AppModel.SpeakerMode.allCases, id: \.self) { Text($0.label).tag($0) }
             }
             Text(model.speakerMode == .voices
-                 ? "Records the sound card only. Use this when it hears everyone (a mixer, a room, a speakerphone): "
+                 ? "Records the inputs only. Use this when they hear everyone (a mixer, a room, a speakerphone): "
                    + "the transcript has Person 1, Person 2… and you can rename them."
-                 : "Records the sound card as you and everything the Mac plays as the other side. Only works when the "
-                   + "sound card hears just you (headphones on).")
+                 : "Records the inputs as you and everything the Mac plays as the other side. Only works when the "
+                   + "inputs hear just you (headphones on).")
                 .font(.caption).foregroundColor(.secondary)
-            Button("Look for sound cards again") { devices = AudioDevices.inputs() }
+        }
+        .onChange(of: model.inputChoices) { if model.isTesting { model.stopTest() } }
+    }
+}
+
+/// One input: which sound card and which of its channels.
+struct InputRow: View {
+    let number: Int
+    @Binding var uid: String
+    @Binding var channel: Int
+    let devices: [InputDevice]
+
+    var body: some View {
+        HStack {
+            Picker("Input \(number)", selection: $uid) {
+                Text("The Mac's default input").tag("")
+                ForEach(devices) { Text("\($0.name) (\($0.channels) in)").tag($0.id) }
+                if !uid.isEmpty, !devices.contains(where: { $0.id == uid }) {
+                    Text("Not connected").tag(uid)
+                }
+            }
+            Picker("Channel", selection: $channel) {
+                Text("All mixed").tag(0)
+                ForEach(1...max(1, channels), id: \.self) { Text("\($0)").tag($0) }
+            }
+            .labelsHidden()
+            .frame(width: 100)
+            .help("Which of the sound card's input channels to record, or all of them mixed")
         }
     }
 
     private var channels: Int {
-        devices.first { $0.id == model.inputDeviceUID }?.channels
-            ?? AudioDevices.defaultInput().map(AudioDevices.inputChannels) ?? 1
+        devices.first { $0.id == uid }?.channels ?? AudioDevices.defaultInput().map(AudioDevices.inputChannels) ?? 1
     }
 }
