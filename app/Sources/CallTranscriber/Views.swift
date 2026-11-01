@@ -203,9 +203,13 @@ struct RecordingPanel: View {
                 Button(model.recordingPaused ? "Resume" : "Pause") { model.pauseRecording(!model.recordingPaused) }
                 Button("Stop") { model.stopRecording() }
             }
-            LevelMeter(label: model.myName, systemImage: "mic", level: model.levels.me)
-            LevelMeter(label: model.theirName, systemImage: "speaker.wave.2", level: model.levels.them)
-            if !model.heardThem, model.recordingElapsed > 20, !model.recordingPaused {
+            if model.recordingTracks {
+                LevelMeter(label: model.myName, systemImage: "mic", level: model.levels.me)
+                LevelMeter(label: model.theirName, systemImage: "speaker.wave.2", level: model.levels.them)
+            } else {
+                LevelMeter(label: "Input", systemImage: "mic", level: model.levels.me)
+            }
+            if model.recordingTracks, !model.heardThem, model.recordingElapsed > 20, !model.recordingPaused {
                 Text("Nothing heard from the other side yet. If they're talking, allow Call Transcriber under System Settings > "
                      + "Privacy & Security > Screen & System Audio Recording (System Audio Recording Only).")
                     .font(.caption).foregroundColor(.orange)
@@ -314,7 +318,8 @@ struct ItemDetail: View {
                                 Button("Recording") {
                                     let both = item.url.appendingPathComponent(CallFiles.both)
                                     NSWorkspace.shared.activateFileViewerSelecting(
-                                        FileManager.default.fileExists(atPath: both.path) ? [both] : [item.meFile, item.themFile])
+                                        FileManager.default.fileExists(atPath: both.path) ? [both]
+                                            : item.isTwoTrack ? [item.meFile, item.themFile] : [item.inputFile])
                                 }
                                 .help("Show the recording: \(CallFiles.both) has both sides together; \(CallFiles.me) (your microphone) and \(CallFiles.them) (the other side) are kept for the transcript")
                             }
@@ -324,7 +329,7 @@ struct ItemDetail: View {
             }
             Section { status }
             Section("Speakers") {
-                if item.kind == .call {
+                if item.kind == .call, item.isTwoTrack {
                     Picker("People on the other side", selection: $item.speakers) {
                         Text("Work it out").tag(0)
                         ForEach(1...10, id: \.self) { Text("\($0)").tag($0) }
@@ -495,9 +500,12 @@ struct SettingsView: View {
                     if !model.outputPath.isEmpty { Button("Default") { model.outputPath = "" } }
                 }
             }
+            RecordingSettings()
             Section("Calls") {
-                LabeledContent("You in transcripts") { TextField("", text: $model.myName).frame(maxWidth: 160) }
-                LabeledContent("The other side") { TextField("", text: $model.theirName).frame(maxWidth: 160) }
+                if model.speakerMode == .tracks {
+                    LabeledContent("You in transcripts") { TextField("", text: $model.myName).frame(maxWidth: 160) }
+                    LabeledContent("The other side") { TextField("", text: $model.theirName).frame(maxWidth: 160) }
+                }
                 Toggle("Remind me to tell the other person before recording", isOn: $model.consentReminder)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Notice to read out or paste into the chat")
@@ -521,6 +529,44 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 520, height: 600)
+        .frame(width: 560, height: 720)
+    }
+}
+
+/// Which sound card, which of its channels, and who's who.
+struct RecordingSettings: View {
+    @EnvironmentObject var model: AppModel
+    @State private var devices = AudioDevices.inputs()
+
+    var body: some View {
+        Section("Recording") {
+            Picker("Sound card", selection: $model.inputDeviceUID) {
+                Text("The Mac's default input").tag("")
+                ForEach(devices) { Text("\($0.name) (\($0.channels) in)").tag($0.id) }
+                if !model.inputDeviceUID.isEmpty, !devices.contains(where: { $0.id == model.inputDeviceUID }) {
+                    Text("Not connected").tag(model.inputDeviceUID)
+                }
+            }
+            .help("Recording always uses this sound card, even if the Mac's default input changes")
+            Picker("Channel", selection: $model.inputChannel) {
+                Text("All channels mixed").tag(0)
+                ForEach(1...max(1, channels), id: \.self) { Text("Channel \($0)").tag($0) }
+            }
+            Picker("Who's who", selection: $model.speakerMode) {
+                ForEach(AppModel.SpeakerMode.allCases, id: \.self) { Text($0.label).tag($0) }
+            }
+            Text(model.speakerMode == .voices
+                 ? "Records the sound card only. Use this when it hears everyone (a mixer, a room, a speakerphone): "
+                   + "the transcript has Person 1, Person 2… and you can rename them."
+                 : "Records the sound card as you and everything the Mac plays as the other side. Only works when the "
+                   + "sound card hears just you (headphones on).")
+                .font(.caption).foregroundColor(.secondary)
+            Button("Look for sound cards again") { devices = AudioDevices.inputs() }
+        }
+    }
+
+    private var channels: Int {
+        devices.first { $0.id == model.inputDeviceUID }?.channels
+            ?? AudioDevices.defaultInput().map(AudioDevices.inputChannels) ?? 1
     }
 }

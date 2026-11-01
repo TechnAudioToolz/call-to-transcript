@@ -15,13 +15,15 @@ import Foundation
 enum CallFiles {
     static let me = "Me.caf"
     static let them = "Them.caf"
+    /// The one recording when voices are told apart (see AppModel.speakerMode).
+    static let input = "Input.caf"
     /// Both sides together, to listen to (made when recording stops).
     static let both = "Call.m4a"
 
     /// Mixes Me.caf and Them.caf in `folder` into Call.m4a.
     static func mix(_ folder: URL) async throws {
         let composition = AVMutableComposition()
-        for name in [me, them] {
+        for name in [me, them, input] where FileManager.default.fileExists(atPath: folder.appendingPathComponent(name).path) {
             let asset = AVURLAsset(url: folder.appendingPathComponent(name))
             guard let source = try await asset.loadTracks(withMediaType: .audio).first,
                   let track = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
@@ -43,7 +45,17 @@ final class CallRecorder: @unchecked Sendable {
     enum Track { case me, them }
 
     let folder: URL
+    /// The sound card to record from (its Core Audio UID); nil is the Mac's default input when Record is pressed.
+    /// Either way the recording stays on that device: it doesn't follow later changes of the default.
+    let inputUID: String?
+    /// 0 mixes all the input's channels; 1, 2… records just that one.
+    let channel: Int
+    /// Also record the Mac's sound (the other side of a call) as its own track.
+    let macSound: Bool
+    /// Called (on any thread) if the input device stops or changes while recording.
+    var onProblem: (@Sendable (String) -> Void)?
     private let engine = AVAudioEngine()
+    private var configObserver: NSObjectProtocol?
     private let lock = NSLock()
     private var files: [Track: AVAudioFile] = [:]
     private var levels: [Track: Float] = [.me: 0, .them: 0]
@@ -56,8 +68,11 @@ final class CallRecorder: @unchecked Sendable {
     private var procID: AudioDeviceIOProcID?
     private let tapQueue = DispatchQueue(label: "Call Transcriber: the Mac's sound", qos: .userInitiated)
 
-    init(folder: URL) {
+    init(folder: URL, inputUID: String?, channel: Int, macSound: Bool) {
         self.folder = folder
+        self.inputUID = inputUID
+        self.channel = channel
+        self.macSound = macSound
     }
 
     // MARK: start and stop
@@ -66,6 +81,7 @@ final class CallRecorder: @unchecked Sendable {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         startedAt = Date()
         try startMicrophone()
+        guard macSound else { return }
         do {
             try startMacSound()
         } catch {
@@ -75,6 +91,8 @@ final class CallRecorder: @unchecked Sendable {
     }
 
     func stop() {
+        if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
+        configObserver = nil
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         if aggregateID != kAudioObjectUnknown {
@@ -115,14 +133,29 @@ final class CallRecorder: @unchecked Sendable {
 
     private func startMicrophone() throws {
         let input = engine.inputNode
+        let device = try inputUID.map { uid -> AudioDeviceID in
+            guard let device = AudioDevices.device(uid: uid) else { throw RecorderError.inputMissing }
+            return device
+        } ?? AudioDevices.defaultInput()
+        // Pin the engine to this device, so it records from it however the Mac's default changes.
+        if var device, let unit = input.audioUnit {
+            try check(AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
+                                           &device, UInt32(MemoryLayout<AudioDeviceID>.size)), "use the chosen sound card")
+        }
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else { throw RecorderError.noMicrophone }
-        let file = try Self.makeFile(folder.appendingPathComponent(CallFiles.me), sampleRate: format.sampleRate)
+        if channel > Int(format.channelCount) { throw RecorderError.noChannel(channel, Int(format.channelCount)) }
+        let name = macSound ? CallFiles.me : CallFiles.input
+        let file = try Self.makeFile(folder.appendingPathComponent(name), sampleRate: format.sampleRate)
         lock.lock()
         files[.me] = file
         lock.unlock()
         input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in
             self?.write(buffer, to: .me)
+        }
+        configObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine,
+                                                                queue: nil) { [weak self] _ in
+            self?.onProblem?("The sound card changed or was unplugged; the recording may have stopped hearing it")
         }
         engine.prepare()
         try engine.start()
@@ -139,8 +172,10 @@ final class CallRecorder: @unchecked Sendable {
         description.muteBehavior = .unmuted
         try check(AudioHardwareCreateProcessTap(description, &tapID), "create the sound tap")
 
-        // A tap is read through a private "aggregate device" clocked by the speakers or headphones.
-        let output = try Self.defaultOutputUID()
+        // A tap is read through a private "aggregate device" clocked by a real device: the chosen sound card if
+        // it has outputs, otherwise the speakers or headphones in use now (and those stay, whatever changes later).
+        let output = try inputUID.flatMap { AudioDevices.device(uid: $0) }.flatMap { AudioDevices.hasOutput($0) ? $0 : nil }
+            .flatMap(AudioDevices.uid) ?? Self.defaultOutputUID()
         let aggregate: [String: Any] = [
             kAudioAggregateDeviceNameKey: "Call Transcriber",
             kAudioAggregateDeviceUIDKey: "com.technaudiotoolz.calltranscriber.\(UUID().uuidString)",
@@ -193,17 +228,25 @@ final class CallRecorder: @unchecked Sendable {
     private func write(_ buffer: AVAudioPCMBuffer, to track: Track) {
         lock.lock()
         defer { lock.unlock() }
-        guard !paused, let file = files[track], buffer.frameLength > 0, let channel = buffer.floatChannelData?[0] else { return }
+        guard !paused, let file = files[track], buffer.frameLength > 0, let data = buffer.floatChannelData,
+              let mono = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: buffer.frameLength) else { return }
         let frames = Int(buffer.frameLength)
+        let count = Int(buffer.format.channelCount)
+        mono.frameLength = buffer.frameLength
+        let out = mono.floatChannelData![0]
+        // the chosen channel of the sound card, or all of them mixed
+        if track == .them || count == 1 || channel > 0 {
+            out.update(from: data[track == .them ? 0 : min(max(channel, 1), count) - 1], count: frames)
+        } else {
+            out.update(repeating: 0, count: frames)
+            for c in 0..<count { for i in 0..<frames { out[i] += data[c][i] / Float(count) } }
+        }
         var sum: Float = 0
-        for i in 0..<frames { sum += channel[i] * channel[i] }
+        for i in 0..<frames { sum += out[i] * out[i] }
         let level = min(1, sqrt(sum / Float(frames)) * 4)
         levels[track] = max(levels[track] ?? 0, level)
         if track == .them, level > 0.01 { heardThem = true }
 
-        let mono = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(frames))!
-        mono.frameLength = AVAudioFrameCount(frames)
-        mono.floatChannelData![0].update(from: channel, count: frames)
         do {
             if file.length == 0 {
                 let lead = Int(Date().timeIntervalSince(startedAt) * file.processingFormat.sampleRate) - frames
@@ -263,11 +306,15 @@ final class CallRecorder: @unchecked Sendable {
 
 enum RecorderError: LocalizedError {
     case noMicrophone
+    case inputMissing
+    case noChannel(Int, Int)
     case coreAudio(String, OSStatus)
 
     var errorDescription: String? {
         switch self {
         case .noMicrophone: return "No microphone was found"
+        case .inputMissing: return "The sound card chosen in Settings isn't connected. Plug it in, or choose another in Settings > Recording."
+        case .noChannel(let c, let n): return "The sound card has \(n) input channel\(n == 1 ? "" : "s"), so channel \(c) can't be recorded. Choose another in Settings > Recording."
         case .coreAudio(let what, let status): return "Couldn't \(what) (Core Audio error \(status))"
         }
     }

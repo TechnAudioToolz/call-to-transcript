@@ -55,10 +55,13 @@ final class Item: ObservableObject, Identifiable {
     var transcriptFile: URL { AppModel.supportFolder.appendingPathComponent("transcripts/\(id.uuidString).json") }
     var meFile: URL { url.appendingPathComponent(CallFiles.me) }
     var themFile: URL { url.appendingPathComponent(CallFiles.them) }
+    var inputFile: URL { url.appendingPathComponent(CallFiles.input) }
+    /// A call recorded as two tracks (Me and the other side) rather than one recording with voices told apart.
+    var isTwoTrack: Bool { FileManager.default.fileExists(atPath: themFile.path) }
 
     /// Reads the length and, for a video, a frame from a tenth of the way in for the list.
     @MainActor func loadDetails() async {
-        let asset = AVURLAsset(url: kind == .call ? meFile : url)
+        let asset = AVURLAsset(url: kind != .call ? url : isTwoTrack ? meFile : inputFile)
         if let time = try? await asset.load(.duration), time.seconds.isFinite, time.seconds > 0 {
             duration = time.seconds
         } else if let length = mediaLength(url) {  // files only ffmpeg reads
@@ -147,6 +150,32 @@ final class AppModel: ObservableObject {
     var pausedForCall = false
     var sleepActivity: NSObjectProtocol?
 
+    /// Who's who: from one recording, by telling voices apart (Person 1, Person 2…), or from two tracks, the
+    /// sound card for you and the Mac's sound for the other side (Me and Client).
+    enum SpeakerMode: String, CaseIterable {
+        case voices, tracks
+
+        var label: String {
+            switch self {
+            case .voices: return "One recording: tell the voices apart"
+            case .tracks: return "Two tracks: me (sound card) and the other side (the Mac's sound)"
+            }
+        }
+    }
+    @Published var speakerMode = SpeakerMode(rawValue: UserDefaults.standard.string(forKey: "speakerMode") ?? "") ?? .voices {
+        didSet { UserDefaults.standard.set(speakerMode.rawValue, forKey: "speakerMode") }
+    }
+    /// The sound card to record from (its Core Audio UID); empty is the Mac's default input.
+    @Published var inputDeviceUID = UserDefaults.standard.string(forKey: "inputDeviceUID") ?? "" {
+        didSet { UserDefaults.standard.set(inputDeviceUID, forKey: "inputDeviceUID") }
+    }
+    /// 0 mixes all the sound card's input channels; 1, 2… records just that one.
+    @Published var inputChannel = UserDefaults.standard.integer(forKey: "inputChannel") {
+        didSet { UserDefaults.standard.set(inputChannel, forKey: "inputChannel") }
+    }
+    /// Whether the call being recorded has two tracks (fixed when Record is pressed).
+    @Published var recordingTracks = false
+
     /// How the two sides are called in transcripts.
     @Published var myName = UserDefaults.standard.string(forKey: "myName") ?? "Me" {
         didSet { UserDefaults.standard.set(myName, forKey: "myName") }
@@ -209,7 +238,9 @@ final class AppModel: ObservableObject {
     /// Files and folders dropped or chosen. Folders are searched for videos and audio.
     func add(_ urls: [URL]) {
         // a call's folder (Me.caf and Them.caf) is one call, not two audio files
-        let isCall = { (url: URL) in FileManager.default.fileExists(atPath: url.appendingPathComponent(CallFiles.them).path) }
+        let isCall = { (url: URL) in
+            [CallFiles.them, CallFiles.input].contains { FileManager.default.fileExists(atPath: url.appendingPathComponent($0).path) }
+        }
         for folder in urls where isCall(folder) { addCall(folder) }
         let urls = urls.filter { !isCall($0) }
         guard !urls.isEmpty else { return }
@@ -313,10 +344,10 @@ final class AppModel: ObservableObject {
         try? FileManager.default.createDirectory(at: item.transcriptFile.deletingLastPathComponent(), withIntermediateDirectories: true)
         let process = Process()
         process.executableURL = Self.helper
-        var arguments = item.kind == .call
-            ? ["--me", item.meFile.path, "--them", item.themFile.path, "--title", item.title,
+        var arguments = item.kind != .call ? [item.url.path]
+            : !item.isTwoTrack ? [item.inputFile.path, "--title", item.title]
+            : ["--me", item.meFile.path, "--them", item.themFile.path, "--title", item.title,
                "--names", "\(myName)|\(theirName)"]
-            : [item.url.path]
         arguments += ["--json", item.transcriptFile.path, "--progress"]
         if item.speakers > 0 { arguments += ["--speakers", String(item.speakers)] }
         if item.cleanup != .off { arguments += ["--cleanup", item.cleanup.rawValue] }

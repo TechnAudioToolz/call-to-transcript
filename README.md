@@ -8,7 +8,13 @@ transcript follow on their own.
 
 Everything runs on your Mac. Nothing is uploaded.
 
-- **Both sides, kept apart.** Your microphone and the Mac's sound (the other side: Zoom, FaceTime, Teams,
+- **Your sound card, fixed.** Choose the sound card (and one of its input channels, or all mixed) in Settings >
+  Recording. Recording stays on it, even if the Mac's default input changes during the call.
+- **Who's who, two ways** (Settings > Recording):
+  - *One recording, voices told apart* (the default): records the sound card only and labels Person 1,
+    Person 2… Use this when the sound card hears everyone, as with a mixer, a room or a speakerphone.
+  - *Two tracks:* the sound card is you, and everything the Mac plays is the other side. Use this with headphones.
+- **Both sides, kept apart** (two-track mode). Your microphone and the Mac's sound (the other side: Zoom, FaceTime, Teams,
   Google Meet in a browser, phone calls through your iPhone, and so on) are recorded as two tracks. So the
   transcript knows who said what: "Me" and "Client", or names you choose. If several people were on the
   other side, their voices are told apart too.
@@ -41,7 +47,8 @@ recording until you turn the reminder off.
 ## Where things are saved
 
 - Transcripts: `~/Call Transcripts` (change it in Settings)
-- Recordings: `~/Call Transcripts/Recordings/Call 2026-10-28 14.05/` with `Call.m4a`, `Me.caf` and `Them.caf`
+- Recordings: `~/Call Transcripts/Recordings/Call 2026-10-28 14.05/` with `Call.m4a`, plus `Input.caf` (one
+  recording) or `Me.caf` and `Them.caf` (two tracks)
 
 ## How it works
 

@@ -33,7 +33,16 @@ extension AppModel {
     @available(macOS 14.4, *)
     private func beginRecording() {
         let name = "Call " + Self.callStamp.string(from: Date())
-        let recorder = CallRecorder(folder: uniqueFolder(recordingsFolder.appendingPathComponent(name)))
+        let uid = inputDeviceUID.isEmpty ? nil : inputDeviceUID
+        let tracks = speakerMode == .tracks
+        let recorder = CallRecorder(folder: uniqueFolder(recordingsFolder.appendingPathComponent(name)),
+                                    inputUID: uid, channel: inputChannel, macSound: tracks)
+        recorder.onProblem = { [weak self] problem in
+            Task { @MainActor in
+                self?.appendLog("    " + problem)
+                self?.lastMessage = problem
+            }
+        }
         if isRunning, !isPaused {  // a transcript being made waits until the call is over
             pause()
             pausedForCall = true
@@ -46,6 +55,7 @@ extension AppModel {
             return
         }
         self.recorder = recorder
+        recordingTracks = tracks
         recordingPaused = false
         recordingStarted = Date()
         pausedTotal = 0
@@ -60,6 +70,9 @@ extension AppModel {
         RecordingSign.shared.show(model: self)
         appendLog("— Recording \(recorder.folder.lastPathComponent)")
         appendLog("    Files: \(recorder.folder.path)")
+        let device = (uid.flatMap(AudioDevices.device(uid:)) ?? AudioDevices.defaultInput()).flatMap(AudioDevices.name) ?? "the default input"
+        appendLog("    From: \(device), \(inputChannel == 0 ? "all channels" : "channel \(inputChannel)")"
+                  + (tracks ? ", and the Mac's sound as the other side" : ""))
         lastMessage = "Recording. Press Stop (⌘.) when the call is over."
     }
 
@@ -92,7 +105,7 @@ extension AppModel {
 
         let item = Item(url: recorder.folder, kind: .call)
         item.title = recorder.folder.lastPathComponent
-        item.speakers = 1  // one person on the other side unless set otherwise
+        item.speakers = recorder.macSound ? 1 : 0  // one person on the other side, or work out how many voices
         item.cleanup = defaultCleanup
         item.duration = recordingElapsed
         items.append(item)
@@ -100,7 +113,7 @@ extension AppModel {
         selection = item.id
         saveQueue()
         lastMessage = "Recorded \(item.title)"
-        if !heardThem {
+        if recorder.macSound, !heardThem {
             appendLog("    Nothing was heard from the other side. If they spoke, allow System Audio Recording for "
                       + "Call Transcriber in System Settings > Privacy & Security > Screen & System Audio Recording.")
         }
@@ -120,14 +133,15 @@ extension AppModel {
     /// A call recorded earlier (a folder with Me.caf and Them.caf), e.g. one copied from another Mac.
     func addCall(_ folder: URL) {
         let fm = FileManager.default
-        guard fm.fileExists(atPath: folder.appendingPathComponent(CallFiles.me).path),
-              fm.fileExists(atPath: folder.appendingPathComponent(CallFiles.them).path) else {
-            lastMessage = "\(folder.lastPathComponent) doesn't have \(CallFiles.me) and \(CallFiles.them)"
+        let twoTrack = fm.fileExists(atPath: folder.appendingPathComponent(CallFiles.me).path)
+            && fm.fileExists(atPath: folder.appendingPathComponent(CallFiles.them).path)
+        guard twoTrack || fm.fileExists(atPath: folder.appendingPathComponent(CallFiles.input).path) else {
+            lastMessage = "\(folder.lastPathComponent) doesn't have \(CallFiles.input), or \(CallFiles.me) and \(CallFiles.them)"
             return
         }
         guard !items.contains(where: { $0.url == folder }) else { return }
         let item = Item(url: folder, kind: .call)
-        item.speakers = 1
+        item.speakers = twoTrack ? 1 : 0
         item.cleanup = defaultCleanup
         items.append(item)
         queueOrder.append(item.id)

@@ -60,7 +60,7 @@ do {
             print("@stage \(stage) \(String(format: "%.3f", fraction))")
         }
     }
-    let transcript: Transcript
+    var transcript: Transcript
     if let call {
         let names = (value("--names") ?? "Me|Client").split(separator: "|").map(String.init)
         transcript = try await Pipeline().runCall(
@@ -69,6 +69,7 @@ do {
             stage: stage, log: { print($0) })
     } else {
         transcript = try await Pipeline().run(input, workFolder: work, options: options, stage: stage, log: { print($0) })
+        if let title = value("--title") { transcript.title = title }
     }
 
     if let json = value("--json") {
